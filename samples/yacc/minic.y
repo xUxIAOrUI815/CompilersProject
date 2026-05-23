@@ -1,8 +1,11 @@
-%token INT FLOAT VOID IF ELSE WHILE RETURN ID NUM ASSIGN EQ NE LT LE GT GE PLUS MINUS MUL DIV LPAREN RPAREN LBRACE RBRACE COMMA SEMI
+%token INT FLOAT VOID BOOL IF ELSE WHILE RETURN ID NUM ASSIGN OR AND NOT EQ NE LT LE GT GE PLUS MINUS MUL DIV LPAREN RPAREN LBRACE RBRACE COMMA SEMI
 %right ASSIGN
+%left OR
+%left AND
 %left EQ NE LT LE GT GE
 %left PLUS MINUS
 %left MUL DIV
+%right NOT
 %%
 program: ext_list ;
 ext_list: ext ext_list ;
@@ -51,3 +54,7 @@ expr: expr LT expr ;
 expr: expr LE expr ;
 expr: expr GT expr ;
 expr: expr GE expr ;
+expr: expr AND expr ;
+expr: expr OR expr ;
+expr: NOT expr ;
+type_spec: BOOL ;

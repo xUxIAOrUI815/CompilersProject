@@ -128,7 +128,8 @@ static ASTNode *make_token_node(const Token *token) {
         type = AST_LITERAL;
         symbol_name = "literal";
     } else if (strcmp(token->kind, "INT") == 0 || strcmp(token->kind, "FLOAT") == 0
-        || strcmp(token->kind, "VOID") == 0 || strcmp(token->kind, "CHAR") == 0) {
+        || strcmp(token->kind, "VOID") == 0 || strcmp(token->kind, "BOOL") == 0
+        || strcmp(token->kind, "CHAR") == 0) {
         type = AST_TYPE_NAME;
         symbol_name = "type";
     }
@@ -347,6 +348,22 @@ static ASTNode *build_reduction_node(int production_id, ASTNode **rhs, int rhs_c
             append_child_if(node, rhs[0]);
             append_child_if(node, rhs[2]);
             return node;
+        case 48:
+            node = alloc_node(AST_EXPRESSION, "and", "&&", line, column);
+            append_child_if(node, rhs[0]);
+            append_child_if(node, rhs[2]);
+            return node;
+        case 49:
+            node = alloc_node(AST_EXPRESSION, "or", "||", line, column);
+            append_child_if(node, rhs[0]);
+            append_child_if(node, rhs[2]);
+            return node;
+        case 50:
+            node = alloc_node(AST_EXPRESSION, "not", "!", line, column);
+            append_child_if(node, rhs[1]);
+            return node;
+        case 51:
+            return rhs_count > 0 ? rhs[0] : NULL;
         default:
             node = alloc_node(AST_NON_TERMINAL, production == NULL ? "node" : production->lhs, "", line, column);
             if (node != NULL) {

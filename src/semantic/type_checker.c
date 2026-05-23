@@ -37,6 +37,8 @@ static void cp_type_from_type_name_node(const ASTNode *node, TypeExpr *type) {
         cp_type_init_primitive(type, TYPE_DOUBLE_T);
     } else if (strcmp(node->lexeme, "void") == 0) {
         cp_type_init_primitive(type, TYPE_VOID_T);
+    } else if (strcmp(node->lexeme, "bool") == 0) {
+        cp_type_init_primitive(type, TYPE_BOOL_T);
     } else {
         cp_type_init_error(type);
     }
@@ -47,12 +49,14 @@ static TypeExpr *cp_shared_type_from_name(const char *name) {
     static TypeExpr float_t;
     static TypeExpr double_t;
     static TypeExpr void_t;
+    static TypeExpr bool_t;
     static int initialized;
     if (!initialized) {
         cp_type_init_primitive(&int_t, TYPE_INT_T);
         cp_type_init_primitive(&float_t, TYPE_FLOAT_T);
         cp_type_init_primitive(&double_t, TYPE_DOUBLE_T);
         cp_type_init_primitive(&void_t, TYPE_VOID_T);
+        cp_type_init_primitive(&bool_t, TYPE_BOOL_T);
         initialized = 1;
     }
     if (name == NULL) return NULL;
@@ -60,6 +64,7 @@ static TypeExpr *cp_shared_type_from_name(const char *name) {
     if (strcmp(name, "float") == 0) return &float_t;
     if (strcmp(name, "double") == 0) return &double_t;
     if (strcmp(name, "void") == 0) return &void_t;
+    if (strcmp(name, "bool") == 0) return &bool_t;
     return NULL;
 }
 
@@ -76,6 +81,15 @@ static int is_compare_expr(const ASTNode *expr) {
         || strcmp(expr->symbol_name, "le") == 0
         || strcmp(expr->symbol_name, "gt") == 0
         || strcmp(expr->symbol_name, "ge") == 0;
+}
+
+static int is_boolean_expr(const ASTNode *expr) {
+    if (expr == NULL || expr->node_type != AST_EXPRESSION) {
+        return 0;
+    }
+    return strcmp(expr->symbol_name, "and") == 0
+        || strcmp(expr->symbol_name, "or") == 0
+        || strcmp(expr->symbol_name, "not") == 0;
 }
 
 TypeExprResult cp_synthesize_expr_type(const ASTNode *expr, SymbolTable *table) {
@@ -231,6 +245,26 @@ static TypeExpr cp_expr_type_internal(const ASTNode *expr, SymbolTable *table, T
                 cp_type_init_primitive(&result_type, TYPE_BOOL_T);
                 return result_type;
             }
+            if (is_boolean_expr(expr)) {
+                lhs_type = cp_expr_type_internal(expr->children[0], table, ctx);
+                if (strcmp(expr->symbol_name, "not") == 0) {
+                    if (!cp_type_is_numeric(&lhs_type)) {
+                        cp_set_type_error(ctx, 8010, expr, "logical operand must be numeric or boolean");
+                        cp_type_init_error(&result_type);
+                        return result_type;
+                    }
+                    cp_type_init_primitive(&result_type, TYPE_BOOL_T);
+                    return result_type;
+                }
+                rhs_type = cp_expr_type_internal(expr->children[1], table, ctx);
+                if (!cp_type_is_numeric(&lhs_type) || !cp_type_is_numeric(&rhs_type)) {
+                    cp_set_type_error(ctx, 8010, expr, "logical operands must be numeric or boolean");
+                    cp_type_init_error(&result_type);
+                    return result_type;
+                }
+                cp_type_init_primitive(&result_type, TYPE_BOOL_T);
+                return result_type;
+            }
             if (strcmp(expr->symbol_name, "call") == 0) {
                 BoolResult call_ok = cp_check_function_call(expr, table);
                 if (!call_ok.base.ok) {
@@ -281,6 +315,56 @@ static int cp_check_declaration(const ASTNode *node, SymbolTable *table, TypeChe
     return 1;
 }
 
+static int cp_make_function_entry(const ASTNode *node, SymbolEntry *fn_entry) {
+    int index;
+    TypeExpr *param_ptrs[CP_MAX_TYPE_PARAMS];
+    if (node == NULL || fn_entry == NULL || node->child_count < 2 || node->children[1] == NULL) {
+        return 0;
+    }
+    memset(fn_entry, 0, sizeof(*fn_entry));
+    snprintf(fn_entry->name, sizeof(fn_entry->name), "%s", node->children[1]->lexeme);
+    fn_entry->category = SYMBOL_FUNCTION;
+    for (index = 0; index < CP_MAX_TYPE_PARAMS; ++index) {
+        param_ptrs[index] = NULL;
+    }
+    if (node->child_count > 2 && node->children[2] != NULL && node->children[2]->node_type == AST_PARAM_LIST) {
+        for (index = 0; index < node->children[2]->child_count && index < CP_MAX_TYPE_PARAMS; ++index) {
+            param_ptrs[index] = cp_shared_type_from_name(node->children[2]->children[index]->children[0]->lexeme);
+        }
+    }
+    cp_type_init_function(
+        &fn_entry->type_expr,
+        node->child_count >= 1 ? cp_shared_type_from_name(node->children[0]->lexeme) : cp_shared_type_from_name("void"),
+        param_ptrs,
+        node->child_count > 2 && node->children[2] != NULL ? node->children[2]->child_count : 0
+    );
+    fn_entry->decl_line = node->line;
+    fn_entry->decl_column = node->column;
+    return 1;
+}
+
+static int cp_predeclare_functions(const ASTNode *ast, SymbolTable *table, TypeCheckContext *ctx) {
+    int index;
+    if (ast == NULL || table == NULL || ctx == NULL || ast->node_type != AST_PROGRAM) {
+        return 1;
+    }
+    for (index = 0; index < ast->child_count; ++index) {
+        const ASTNode *child = ast->children[index];
+        SymbolEntry fn_entry;
+        if (child == NULL || child->node_type != AST_FUNCTION_DEF) {
+            continue;
+        }
+        if (!cp_make_function_entry(child, &fn_entry)) {
+            continue;
+        }
+        if (!cp_symbol_table_insert(table, &fn_entry)) {
+            cp_set_type_error(ctx, 7001, child, "symbol redefinition in current scope");
+            return 0;
+        }
+    }
+    return 1;
+}
+
 static int cp_check_node(const ASTNode *node, SymbolTable *table, TypeCheckContext *ctx, const TypeExpr *function_return_type) {
     int index;
     TypeExpr return_type;
@@ -311,31 +395,12 @@ static int cp_check_node(const ASTNode *node, SymbolTable *table, TypeCheckConte
             cp_symbol_table_exit_scope(table);
             return 1;
         case AST_FUNCTION_DEF:
-            if (node->child_count >= 2 && cp_symbol_table_lookup_current(table, node->children[1]->lexeme) != NULL) {
-                cp_set_type_error(ctx, 7001, node, "symbol redefinition in current scope");
-                return 0;
-            }
-            if (node->child_count >= 2 && node->children[1] != NULL) {
+            if (node->child_count >= 2 && node->children[1] != NULL
+                && cp_symbol_table_lookup_current(table, node->children[1]->lexeme) == NULL) {
                 SymbolEntry fn_entry;
-                TypeExpr *param_ptrs[CP_MAX_TYPE_PARAMS];
-                memset(&fn_entry, 0, sizeof(fn_entry));
-                snprintf(fn_entry.name, sizeof(fn_entry.name), "%s", node->children[1]->lexeme);
-                fn_entry.category = SYMBOL_FUNCTION;
-                for (index = 0; index < CP_MAX_TYPE_PARAMS; ++index) {
-                    param_ptrs[index] = NULL;
+                if (cp_make_function_entry(node, &fn_entry)) {
+                    cp_symbol_table_insert(table, &fn_entry);
                 }
-                if (node->child_count > 2 && node->children[2] != NULL && node->children[2]->node_type == AST_PARAM_LIST) {
-                    for (index = 0; index < node->children[2]->child_count && index < CP_MAX_TYPE_PARAMS; ++index) {
-                        param_ptrs[index] = cp_shared_type_from_name(node->children[2]->children[index]->children[0]->lexeme);
-                    }
-                }
-                cp_type_init_function(
-                    &fn_entry.type_expr,
-                    node->child_count >= 1 ? cp_shared_type_from_name(node->children[0]->lexeme) : cp_shared_type_from_name("void"),
-                    param_ptrs,
-                    node->child_count > 2 && node->children[2] != NULL ? node->children[2]->child_count : 0
-                );
-                cp_symbol_table_insert(table, &fn_entry);
             }
             memset(&return_type, 0, sizeof(return_type));
             if (node->child_count >= 1) {
@@ -425,6 +490,11 @@ BoolResult cp_check_types(const ASTNode *ast) {
     memset(&ctx, 0, sizeof(ctx));
     cp_symbol_table_init(&table);
     RESULT_SUCCESS(&result.base);
+    if (!cp_predeclare_functions(ast, &table, &ctx)) {
+        RESULT_FAILURE(&result.base, ctx.error);
+        result.data = 0;
+        return result;
+    }
     result.data = cp_check_node(ast, &table, &ctx, NULL);
     if (ctx.has_error) {
         RESULT_FAILURE(&result.base, ctx.error);

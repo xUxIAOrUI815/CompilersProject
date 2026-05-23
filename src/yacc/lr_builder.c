@@ -420,6 +420,7 @@ LRTableResult cp_build_lr_table(const Grammar *grammar) {
     static AugmentedGrammar augmented;
     static LR1ItemSet lr1_states[CP_MAX_LR_STATES];
     static LR1ItemSet lalr_states[CP_MAX_LR_STATES];
+    static LR1ItemSet moved;
     static int lr1_transitions[CP_MAX_LR_STATES][CP_MAX_GRAMMAR_SYMBOLS];
     static int lr1_to_lalr[CP_MAX_LR_STATES];
     int lr1_state_count = 0;
@@ -462,9 +463,9 @@ LRTableResult cp_build_lr_table(const Grammar *grammar) {
     while (processed < lr1_state_count && result.base.ok) {
         int symbol_index;
         for (symbol_index = 0; symbol_index < result.data.symbols.count; ++symbol_index) {
-            LR1ItemSet moved;
             int target_state;
             const char *symbol = result.data.symbols.names[symbol_index];
+            memset(&moved, 0, sizeof(moved));
             goto_lr1(grammar, &analysis.data, &augmented, &lr1_states[processed], symbol, &moved);
             if (moved.count == 0) {
                 continue;

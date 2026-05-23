@@ -32,13 +32,15 @@ static void test_parse_lex_spec(void) {
 
 static void test_tokenize_source(void) {
     LexSpecResult spec = cp_parse_lex_spec("samples/lex/minic.l");
-    TokenStreamResult result = cp_tokenize_source(&spec.data, "int sum = 12;");
+    TokenStreamResult result = cp_tokenize_source(&spec.data, "bool ok = !done && ready || 0;");
     assert(result.base.ok);
-    assert(strcmp(result.data.tokens[0].kind, "INT") == 0);
+    assert(strcmp(result.data.tokens[0].kind, "BOOL") == 0);
     assert(strcmp(result.data.tokens[1].kind, "ID") == 0);
-    assert(strcmp(result.data.tokens[1].lexeme, "sum") == 0);
-    assert(strcmp(result.data.tokens[3].kind, "NUM") == 0);
-    assert(strcmp(result.data.tokens[5].kind, "EOF") == 0);
+    assert(strcmp(result.data.tokens[1].lexeme, "ok") == 0);
+    assert(strcmp(result.data.tokens[3].kind, "NOT") == 0);
+    assert(strcmp(result.data.tokens[5].kind, "AND") == 0);
+    assert(strcmp(result.data.tokens[7].kind, "OR") == 0);
+    assert(strcmp(result.data.tokens[10].kind, "EOF") == 0);
 }
 
 static void test_keyword_longest_match(void) {
@@ -137,7 +139,7 @@ static void test_semantic_pipeline(void) {
 static void test_full_pipeline_from_specs(void) {
     LexSpecResult lex = cp_parse_lex_spec("samples/lex/minic.l");
     GrammarResult grammar = cp_parse_yacc_spec("samples/yacc/minic.y");
-    TokenStreamResult tokens = cp_tokenize_source(&lex.data, "int inc(int x) { return x + 1; } int main() { int sum = 1 + 2; while (sum < 5) { sum = inc(sum); } if (sum >= 5) { sum = sum - 1; } else { sum = 0; } return sum; }");
+    TokenStreamResult tokens = cp_tokenize_source(&lex.data, "int main() { int sum = 1 + 2; while (sum < 5 && !done(sum)) { sum = inc(sum); } if (sum >= 5 || sum == 0) { sum = sum - 1; } else { sum = 0; } return sum; } int inc(int x) { return x + 1; } int done(int x) { return x > 9; }");
     ASTNodeResult ast = cp_parse_tokens(&grammar.data, &tokens.data);
     SymbolTableResult symbols = cp_run_semantic_actions(&ast.data);
     BoolResult type_ok = cp_check_types(&ast.data);
@@ -152,9 +154,10 @@ static void test_full_pipeline_from_specs(void) {
     assert(symbols.base.ok);
     assert(type_ok.base.ok);
     assert(ir.base.ok);
-    assert(symbols.data.scopes[0].count == 2);
-    assert(strcmp(symbols.data.scopes[0].entries[0].name, "inc") == 0);
-    assert(strcmp(symbols.data.scopes[0].entries[1].name, "main") == 0);
+    assert(symbols.data.scopes[0].count == 3);
+    assert(strcmp(symbols.data.scopes[0].entries[0].name, "main") == 0);
+    assert(strcmp(symbols.data.scopes[0].entries[1].name, "inc") == 0);
+    assert(strcmp(symbols.data.scopes[0].entries[2].name, "done") == 0);
     assert(ir.data.count >= 18);
     assert(ir.data.items[0].op == IR_FUNC_BEGIN);
     for (index = 0; index < ir.data.count; ++index) {
@@ -197,7 +200,7 @@ static void test_type_error_assignment(void) {
 static void test_function_call_argument_type_error(void) {
     LexSpecResult lex = cp_parse_lex_spec("samples/lex/minic.l");
     GrammarResult grammar = cp_parse_yacc_spec("samples/yacc/minic.y");
-    TokenStreamResult tokens = cp_tokenize_source(&lex.data, "int inc(int x) { return x; } void v; int main() { return inc(v); }");
+    TokenStreamResult tokens = cp_tokenize_source(&lex.data, "int inc(int x) { return x; } float v; int main() { return inc(v); }");
     ASTNodeResult ast = cp_parse_tokens(&grammar.data, &tokens.data);
     BoolResult type_ok;
     assert(lex.base.ok);
@@ -207,6 +210,46 @@ static void test_function_call_argument_type_error(void) {
     type_ok = cp_check_types(&ast.data);
     assert(!type_ok.base.ok);
     assert(type_ok.base.errors[0].code == 8009);
+}
+
+static void test_forward_function_call(void) {
+    LexSpecResult lex = cp_parse_lex_spec("samples/lex/minic.l");
+    GrammarResult grammar = cp_parse_yacc_spec("samples/yacc/minic.y");
+    TokenStreamResult tokens = cp_tokenize_source(&lex.data, "int main() { return inc(1); } int inc(int x) { return x + 1; }");
+    ASTNodeResult ast = cp_parse_tokens(&grammar.data, &tokens.data);
+    BoolResult type_ok;
+    assert(lex.base.ok);
+    assert(grammar.base.ok);
+    assert(tokens.base.ok);
+    assert(ast.base.ok);
+    type_ok = cp_check_types(&ast.data);
+    assert(type_ok.base.ok);
+}
+
+static void test_short_circuit_ir(void) {
+    LexSpecResult lex = cp_parse_lex_spec("samples/lex/minic.l");
+    GrammarResult grammar = cp_parse_yacc_spec("samples/yacc/minic.y");
+    TokenStreamResult tokens = cp_tokenize_source(&lex.data, "int main() { int a = 0; int b = 1; if (a != 0 && b != 0 || !a) { return b; } return a; }");
+    ASTNodeResult ast = cp_parse_tokens(&grammar.data, &tokens.data);
+    BoolResult type_ok;
+    QuadrupleListResult ir;
+    int index;
+    int saw_conditional = 0;
+    int saw_goto = 0;
+    assert(lex.base.ok);
+    assert(grammar.base.ok);
+    assert(tokens.base.ok);
+    assert(ast.base.ok);
+    type_ok = cp_check_types(&ast.data);
+    assert(type_ok.base.ok);
+    ir = cp_build_ir(&ast.data);
+    assert(ir.base.ok);
+    for (index = 0; index < ir.data.count; ++index) {
+        saw_conditional |= ir.data.items[index].op == IR_IF_NE;
+        saw_goto |= ir.data.items[index].op == IR_GOTO;
+    }
+    assert(saw_conditional);
+    assert(saw_goto);
 }
 
 int main(void) {
@@ -222,5 +265,7 @@ int main(void) {
     test_full_pipeline_from_specs();
     test_type_error_assignment();
     test_function_call_argument_type_error();
+    test_forward_function_call();
+    test_short_circuit_ir();
     return 0;
 }
