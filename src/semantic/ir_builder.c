@@ -54,6 +54,15 @@ static int is_compare_expr(const ASTNode *node) {
         || strcmp(node->symbol_name, "ge") == 0;
 }
 
+static int is_logical_expr(const ASTNode *node) {
+    if (node == NULL || node->node_type != AST_EXPRESSION) {
+        return 0;
+    }
+    return strcmp(node->symbol_name, "and") == 0
+        || strcmp(node->symbol_name, "or") == 0
+        || strcmp(node->symbol_name, "not") == 0;
+}
+
 static IROp compare_op(const char *name) {
     if (strcmp(name, "lt") == 0) return IR_IF_LT;
     if (strcmp(name, "le") == 0) return IR_IF_LE;
@@ -146,6 +155,28 @@ static void cp_gen_condition(const ASTNode *node, IRContext *ctx, const char *tr
         cp_ir_emit(ctx->list, IR_GOTO, "_", "_", false_label);
         return;
     }
+    if (is_logical_expr(node)) {
+        if (strcmp(node->symbol_name, "and") == 0 && node->child_count >= 2) {
+            char rhs_label[64];
+            cp_new_label(ctx, rhs_label, sizeof(rhs_label));
+            cp_gen_condition(node->children[0], ctx, rhs_label, false_label);
+            cp_ir_emit(ctx->list, IR_LABEL, "_", "_", rhs_label);
+            cp_gen_condition(node->children[1], ctx, true_label, false_label);
+            return;
+        }
+        if (strcmp(node->symbol_name, "or") == 0 && node->child_count >= 2) {
+            char rhs_label[64];
+            cp_new_label(ctx, rhs_label, sizeof(rhs_label));
+            cp_gen_condition(node->children[0], ctx, true_label, rhs_label);
+            cp_ir_emit(ctx->list, IR_LABEL, "_", "_", rhs_label);
+            cp_gen_condition(node->children[1], ctx, true_label, false_label);
+            return;
+        }
+        if (strcmp(node->symbol_name, "not") == 0 && node->child_count >= 1) {
+            cp_gen_condition(node->children[0], ctx, false_label, true_label);
+            return;
+        }
+    }
     cp_gen_expr(node, ctx, place, sizeof(place));
     cp_ir_emit(ctx->list, IR_IF_NE, place, "0", true_label);
     cp_ir_emit(ctx->list, IR_GOTO, "_", "_", false_label);
@@ -177,6 +208,21 @@ static void cp_gen_expr(const ASTNode *node, IRContext *ctx, char *out_place, si
         cp_gen_condition(node, ctx, true_label, end_label);
         cp_ir_emit(ctx->list, IR_LABEL, "_", "_", true_label);
         cp_ir_emit(ctx->list, IR_ASSIGN, "1", "_", out_place);
+        cp_ir_emit(ctx->list, IR_LABEL, "_", "_", end_label);
+        return;
+    }
+    if (is_logical_expr(node)) {
+        char false_label[64];
+        cp_new_temp(ctx, out_place, out_place_size);
+        cp_new_label(ctx, true_label, sizeof(true_label));
+        cp_new_label(ctx, false_label, sizeof(false_label));
+        cp_new_label(ctx, end_label, sizeof(end_label));
+        cp_ir_emit(ctx->list, IR_ASSIGN, "0", "_", out_place);
+        cp_gen_condition(node, ctx, true_label, false_label);
+        cp_ir_emit(ctx->list, IR_LABEL, "_", "_", true_label);
+        cp_ir_emit(ctx->list, IR_ASSIGN, "1", "_", out_place);
+        cp_ir_emit(ctx->list, IR_GOTO, "_", "_", end_label);
+        cp_ir_emit(ctx->list, IR_LABEL, "_", "_", false_label);
         cp_ir_emit(ctx->list, IR_LABEL, "_", "_", end_label);
         return;
     }

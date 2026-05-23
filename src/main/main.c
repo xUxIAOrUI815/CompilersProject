@@ -363,14 +363,14 @@ static void print_ir(const QuadrupleList *ir) {
 }
 
 static int cmd_semantic(const char *lex_spec_path, const char *yacc_spec_path, const char *source_path) {
-    LexSpecResult lex_spec;
-    GrammarResult grammar;
-    TokenStreamResult tokens;
-    ASTNodeResult ast;
-    SymbolTableResult symbols;
-    BoolResult type_check;
-    QuadrupleListResult ir;
-    char source[4096];
+    static LexSpecResult lex_spec;
+    static GrammarResult grammar;
+    static TokenStreamResult tokens;
+    static ASTNodeResult ast;
+    static SymbolTableResult symbols;
+    static BoolResult type_check;
+    static QuadrupleListResult ir;
+    static char source[4096];
 
     lex_spec = cp_parse_lex_spec(lex_spec_path);
     if (!lex_spec.base.ok) {
